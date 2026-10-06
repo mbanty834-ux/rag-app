@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -256,4 +256,4 @@ with st.sidebar:
         st.session_state.messages = []
 
         st.rerun()
-```
+
