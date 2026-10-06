@@ -1,4 +1,4 @@
-
+```python
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -163,11 +163,10 @@ if query:
     # --------------------------------------------------
     # Create Context
     # --------------------------------------------------
+
     context = "\n\n".join(
-    doc.page_content
-    for doc in docs
-    if doc.page_content and len(doc.page_content.strip()) > 20
-)
+        [doc.page_content for doc in docs]
+    )
 
 
     # --------------------------------------------------
@@ -199,7 +198,7 @@ if query:
 
     with st.chat_message("assistant"):
 
-        st.write(response.content)
+        st.markdown(answer)
 
 
     # --------------------------------------------------
@@ -257,3 +256,4 @@ with st.sidebar:
         st.session_state.messages = []
 
         st.rerun()
+```
