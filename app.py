@@ -1,259 +1,125 @@
-
 import streamlit as st
 from dotenv import load_dotenv
+import tempfile
+import os
 
-from langchain_google_genai import (
-    ChatGoogleGenerativeAI,
-    GoogleGenerativeAIEmbeddings
-)
-
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 
 
-# --------------------------------------------------
-# Load environment variables
-# --------------------------------------------------
-
 load_dotenv()
 
+st.set_page_config(page_title="RAG Book Assistant")
 
-# --------------------------------------------------
-# Streamlit page configuration
-# --------------------------------------------------
+st.title("📚 RAG Book Assistant")
+st.write("Upload a PDF and ask questions from the document")
 
-st.set_page_config(
-    page_title="AI RAG Assistant",
-    page_icon="🤖",
-    layout="wide"
-)
+uploaded_file = st.file_uploader("Upload a PDF book", type="pdf")
 
 
-# --------------------------------------------------
-# Title
-# --------------------------------------------------
+if uploaded_file:
 
-st.title("🤖 AI RAG Assistant")
-st.write("Ask questions from your knowledge base.")
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        file_path = tmp_file.name
 
+    st.success("PDF uploaded successfully!")
 
-# --------------------------------------------------
-# Load Embedding Model
-# --------------------------------------------------
+    if st.button("Create Vector Database"):
 
-embedding_model = GoogleGenerativeAIEmbeddings(
-    model="gemini-embedding-001"
-)
+        with st.spinner("Processing document..."):
 
+            loader = PyPDFLoader(file_path)
+            docs = loader.load()
 
-# --------------------------------------------------
-# Load Chroma Vector Database
-# --------------------------------------------------
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200
+            )
 
-vectorstore = Chroma(
-    persist_directory="chroma-db",
-    embedding_function=embedding_model
-)
+            chunks = splitter.split_documents(docs)
 
+            embeddings = OpenAIEmbeddings()
 
-# --------------------------------------------------
-# Create Retriever
-# --------------------------------------------------
+            vectorstore = Chroma.from_documents(
+                documents=chunks,
+                embedding=embeddings,
+                persist_directory="chroma_db"
+            )
 
-retriever = vectorstore.as_retriever(
-    search_type="mmr",
-    search_kwargs={
-        "k": 3,
-        "fetch_k": 10,
-        "lambda_mult": 0.5
-    }
-)
+            vectorstore.persist()
+
+        st.success("Vector database created!")
 
 
-# --------------------------------------------------
-# Load Gemini LLM
-# --------------------------------------------------
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
-    temperature=0.2
-)
+if os.path.exists("chroma_db"):
 
+    embeddings = OpenAIEmbeddings()
 
-# --------------------------------------------------
-# RAG Prompt
-# --------------------------------------------------
+    vectorstore = Chroma(
+        persist_directory="chroma_db",
+        embedding_function=embeddings
+    )
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-            You are a helpful AI RAG assistant.
-
-            Answer the user's question using ONLY the provided context.
-
-            If the answer is not present in the context, say:
-
-            "I don't know. The answer is not available
-            in the provided context."
-
-            Do not make up information.
-
-            Context:
-            {context}
-            """
-        ),
-        (
-            "human",
-            "{question}"
-        )
-    ]
-)
-
-
-# --------------------------------------------------
-# Chat History
-# --------------------------------------------------
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-
-# --------------------------------------------------
-# Display Previous Messages
-# --------------------------------------------------
-
-for message in st.session_state.messages:
-
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-
-# --------------------------------------------------
-# User Input
-# --------------------------------------------------
-
-query = st.chat_input("Ask something about your documents...")
-
-
-if query:
-
-    # Display user question
-    with st.chat_message("user"):
-        st.markdown(query)
-
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": query
+    retriever = vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k":4,
+            "fetch_k":10,
+            "lambda_mult":0.5
         }
     )
 
+    llm = ChatMistralAI(model="mistral-small-2506")
 
-    # --------------------------------------------------
-    # Retrieve relevant documents
-    # --------------------------------------------------
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a helpful AI assistant.
 
-    with st.spinner("Searching knowledge base..."):
+Use ONLY the provided context to answer the question.
+
+If the answer is not present in the context,
+say: "I could not find the answer in the document."
+"""
+            ),
+            (
+                "human",
+                """Context:
+{context}
+
+Question:
+{question}
+"""
+            )
+        ]
+    )
+
+    st.divider()
+    st.subheader("Ask Questions From the Book")
+
+    query = st.text_input("Enter your question")
+
+    if query:
 
         docs = retriever.invoke(query)
 
+        context = "\n\n".join(
+            [doc.page_content for doc in docs]
+        )
 
-    # --------------------------------------------------
-    # Create Context
-    # --------------------------------------------------
-
-    context = "\n\n".join(
-        [doc.page_content for doc in docs]
-    )
-
-
-    # --------------------------------------------------
-    # Create Final Prompt
-    # --------------------------------------------------
-
-    final_prompt = prompt.invoke(
-        {
+        final_prompt = prompt.invoke({
             "context": context,
             "question": query
-        }
-    )
-
-
-    # --------------------------------------------------
-    # Generate Answer
-    # --------------------------------------------------
-
-    with st.spinner("Generating answer..."):
+        })
 
         response = llm.invoke(final_prompt)
 
-        answer = response.content
-
-
-    # --------------------------------------------------
-    # Display AI Response
-    # --------------------------------------------------
-
-    with st.chat_message("assistant"):
-
-        st.markdown(answer)
-
-
-    # --------------------------------------------------
-    # Save AI Response
-    # --------------------------------------------------
-
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": answer
-        }
-    )
-
-
-    # --------------------------------------------------
-    # Show Retrieved Sources
-    # --------------------------------------------------
-
-    with st.expander("📚 Retrieved Documents"):
-
-        for i, doc in enumerate(docs, start=1):
-
-            st.markdown(f"### Document {i}")
-
-            st.write(doc.page_content)
-
-            if doc.metadata:
-                st.caption(
-                    f"Metadata: {doc.metadata}"
-                )
-
-
-# --------------------------------------------------
-# Sidebar
-# --------------------------------------------------
-
-with st.sidebar:
-
-    st.header("⚙️ RAG Settings")
-
-    st.write("**Embedding Model**")
-    st.code("gemini-embedding-001")
-
-    st.write("**LLM**")
-    st.code("gemini-3.6-flash")
-
-    st.write("**Retriever**")
-    st.code("MMR")
-
-    st.write("**Documents Retrieved**")
-    st.write("3")
-
-    if st.button("🗑️ Clear Chat"):
-
-        st.session_state.messages = []
-
-        st.rerun()
-
+        st.write("### AI Answer")
+        st.write(response.content)
